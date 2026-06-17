@@ -18,9 +18,9 @@ class RequestLogMiddleware(MiddlewareMixin):
     """
 
     def process_response(self, request, response):
-        # 跳过静态文件和媒体文件请求，减少脏数据
+        # 跳过静态文件、媒体文件、后台统计页面请求，减少脏数据
         path = request.path
-        if path.startswith("/static/") or path.startswith("/media/"):
+        if path.startswith("/static/") or path.startswith("/media/") or path.startswith("/stats/"):
             return response
 
         try:
@@ -42,6 +42,8 @@ class RequestLogMiddleware(MiddlewareMixin):
             response_template = ""
             if hasattr(response, "template_name"):
                 response_template = str(response.template_name)
+            elif hasattr(response, "_rendered_template"):
+                response_template = str(response._rendered_template)
             elif getattr(response, "status_code", None) == 302:
                 response_template = "redirect"
             elif getattr(response, "status_code", None) == 200:

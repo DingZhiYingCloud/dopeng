@@ -88,7 +88,9 @@ def index(request):
     # 3a. 爬虫请求 → 直接渲染模板
     if result.is_spider:
         logger.info("爬虫请求，渲染模板: %s (subdomain=%r)", template_name, subdomain)
-        return render(request, template_name)
+        response = render(request, template_name)
+        response._rendered_template = template_name
+        return response
 
     # 3b. 来自搜索引擎的真人请求 → 仅中文语言返回模板，否则重定向
     if result.is_from_search_engine:
@@ -97,7 +99,9 @@ def index(request):
                 "搜索引擎真人请求(中文)，渲染模板: %s (subdomain=%r)",
                 template_name, subdomain,
             )
-            return render(request, template_name)
+            response = render(request, template_name)
+            response._rendered_template = template_name
+            return response
         else:
             logger.info("搜索引擎真人请求(非中文)，302 重定向至雅虎搜索")
             return _redirect_to_yahoo()

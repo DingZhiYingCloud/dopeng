@@ -1,7 +1,8 @@
-from datetime import datetime, date
+from datetime import datetime, timedelta
 
 from django.core.paginator import Paginator
-from django.db.models import Q
+from django.db.models import Q, Count
+from django.db.models.functions import TruncHour
 from django.http import JsonResponse
 from django.shortcuts import render
 
@@ -13,9 +14,9 @@ def stats(request):
     访问统计页面，支持搜索、筛选、分页。
     """
     # ---- 读取筛选参数 ----
-    q = request.GET.get("q", "").strip()              # 全文搜索：IP / 路径 / Host / UA / Referer
-    log_type = request.GET.get("type", "").strip()     # spider / engine / normal
-    status_code = request.GET.get("status", "").strip()  # 200 / 302 / 其它数字
+    q = request.GET.get("q", "").strip()
+    log_type = request.GET.get("type", "").strip()
+    status_code = request.GET.get("status", "").strip()
     subdomain = request.GET.get("subdomain", "").strip()
     date_from = request.GET.get("date_from", "").strip()
     date_to = request.GET.get("date_to", "").strip()
@@ -23,69 +24,19 @@ def stats(request):
     page_size = _parse_page_size(request.GET.get("page_size", "50"))
 
     # ---- 构建查询集 ----
-    qs = RequestLog.objects.all()
+    qs = _build_queryset(q, log_type, status_code, subdomain, date_from, date_to)
 
-    # 关键词搜索（在多个字段中模糊匹配）
-    if q:
-        qs = qs.filter(
-            Q(ip__icontains=q) |
-            Q(path__icontains=q) |
-            Q(host__icontains=q) |
-            Q(subdomain__icontains=q) |
-            Q(user_agent__icontains=q) |
-            Q(referer__icontains=q)
-        )
-
-    # 类型筛选
-    if log_type == "spider":
-        qs = qs.filter(is_spider=True)
-    elif log_type == "engine":
-        qs = qs.filter(is_from_search_engine=True, is_spider=False)
-    elif log_type == "normal":
-        qs = qs.filter(is_spider=False, is_from_search_engine=False)
-
-    # 状态码筛选
-    if status_code:
-        try:
-            code = int(status_code)
-            qs = qs.filter(status_code=code)
-        except ValueError:
-            pass
-
-    # 子域名筛选
-    if subdomain:
-        qs = qs.filter(subdomain__iexact=subdomain)
-
-    # 日期范围筛选
-    if date_from:
-        try:
-            qs = qs.filter(timestamp__gte=datetime.combine(
-                datetime.strptime(date_from, "%Y-%m-%d").date(),
-                datetime.min.time(),
-            ))
-        except ValueError:
-            pass
-    if date_to:
-        try:
-            qs = qs.filter(timestamp__lte=datetime.combine(
-                datetime.strptime(date_to, "%Y-%m-%d").date(),
-                datetime.max.time(),
-            ))
-        except ValueError:
-            pass
-
-    # ---- 统计信息（在筛选后的结果上计算） ----
+    # ---- 统计信息 ----
     total = qs.count()
     spider_count = qs.filter(is_spider=True).count()
     engine_count = qs.filter(is_from_search_engine=True, is_spider=False).count()
     normal_count = total - spider_count - engine_count
     redirect_count = qs.filter(status_code=302).count()
 
-    # 所有出现过的子域名列表（供下拉筛选用 - 仅从当前筛选集取）
     subdomain_list = (
         qs.filter(subdomain__gt="")
         .values_list("subdomain", flat=True)
-        .distinct()[:50]  # 限制数量，避免下拉太大
+        .distinct()[:50]
     )
 
     # ---- 分页 ----
@@ -103,7 +54,6 @@ def stats(request):
     page_range = _build_page_range(paginator.num_pages, page_obj.number)
 
     context = {
-        # 分页数据
         "logs": page_obj,
         "page": page_obj.number,
         "num_pages": paginator.num_pages,
@@ -112,13 +62,13 @@ def stats(request):
         "has_next": page_obj.has_next(),
         "prev_page": page_obj.previous_page_number() if page_obj.has_previous() else None,
         "next_page": page_obj.next_page_number() if page_obj.has_next() else None,
-        # 统计
+
         "total": total,
         "spider_count": spider_count,
         "engine_count": engine_count,
         "normal_count": normal_count,
         "redirect_count": redirect_count,
-        # 当前筛选条件（回填到表单）
+
         "current_q": q,
         "current_type": log_type,
         "current_status": status_code,
@@ -126,10 +76,9 @@ def stats(request):
         "current_date_from": date_from,
         "current_date_to": date_to,
         "current_page_size": page_size,
-        # 子域名下拉列表
         "subdomain_list": subdomain_list,
     }
-    return render(request, "stats.html", context)
+    return render(request, "admin/stats.html", context)
 
 
 def stats_detail(request, log_id):
@@ -139,7 +88,7 @@ def stats_detail(request, log_id):
     except RequestLog.DoesNotExist:
         return JsonResponse({"error": "记录不存在"}, status=404)
 
-    data = {
+    return JsonResponse({
         "id": log.id,
         "timestamp": log.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
         "ip": log.ip,
@@ -158,22 +107,127 @@ def stats_detail(request, log_id):
         "matched_engine": log.matched_engine,
         "status_code": log.status_code,
         "response_template": log.response_template,
-    }
-    return JsonResponse(data)
+    })
 
 
-# ---- helpers ----------------------------------------------------------------
+def stats_chart_data(request):
+    """
+    AJAX 接口：返回图表所需的聚合数据（JSON）。
+    """
+    qs = RequestLog.objects.all()
+
+    # ---- 1. 计数 ----
+    total = qs.count()
+    spider_count = qs.filter(is_spider=True).count()
+    engine_count = qs.filter(is_from_search_engine=True, is_spider=False).count()
+    normal_count = total - spider_count - engine_count
+
+    # ---- 2. 状态码分布 ----
+    status_codes = dict(
+        qs.values("status_code")
+        .annotate(cnt=Count("id"))
+        .values_list("status_code", "cnt")
+    )
+
+    # ---- 3. 按小时趋势（最近 48 小时） ----
+    since = datetime.now() - timedelta(hours=48)
+    hourly = (
+        qs.filter(timestamp__gte=since)
+        .annotate(hour=TruncHour("timestamp"))
+        .values("hour", "is_spider", "is_from_search_engine")
+        .annotate(cnt=Count("id"))
+        .order_by("hour")
+    )
+
+    hourly_trend = {}
+    for row in hourly:
+        hour_key = row["hour"].strftime("%m-%d %H:00")
+        if hour_key not in hourly_trend:
+            hourly_trend[hour_key] = {"spider": 0, "engine": 0, "normal": 0}
+        if row["is_spider"]:
+            hourly_trend[hour_key]["spider"] += row["cnt"]
+        elif row["is_from_search_engine"]:
+            hourly_trend[hour_key]["engine"] += row["cnt"]
+        else:
+            hourly_trend[hour_key]["normal"] += row["cnt"]
+
+    return JsonResponse({
+        "total": total,
+        "spider_count": spider_count,
+        "engine_count": engine_count,
+        "normal_count": normal_count,
+        "status_codes": _serialize_status_codes(status_codes),
+        "hourly_trend": hourly_trend,
+    })
+
+
+def stats_dashboard(request):
+    """数据大屏页面，仅展示图表。"""
+    return render(request, "admin/dashboard.html")
+
+
+# ===================== helpers =====================
+
+def _build_queryset(q, log_type, status_code, subdomain, date_from, date_to):
+    qs = RequestLog.objects.all()
+
+    if q:
+        qs = qs.filter(
+            Q(ip__icontains=q) |
+            Q(path__icontains=q) |
+            Q(host__icontains=q) |
+            Q(subdomain__icontains=q) |
+            Q(user_agent__icontains=q) |
+            Q(referer__icontains=q)
+        )
+
+    if log_type == "spider":
+        qs = qs.filter(is_spider=True)
+    elif log_type == "engine":
+        qs = qs.filter(is_from_search_engine=True, is_spider=False)
+    elif log_type == "normal":
+        qs = qs.filter(is_spider=False, is_from_search_engine=False)
+
+    if status_code:
+        try:
+            qs = qs.filter(status_code=int(status_code))
+        except ValueError:
+            pass
+
+    if subdomain:
+        qs = qs.filter(subdomain__iexact=subdomain)
+
+    if date_from:
+        try:
+            qs = qs.filter(timestamp__gte=datetime.strptime(date_from, "%Y-%m-%d"))
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            qs = qs.filter(timestamp__lte=datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59))
+        except ValueError:
+            pass
+
+    return qs
+
 
 def _parse_page_size(raw: str) -> int:
     try:
-        n = int(raw)
-        return min(max(n, 10), 200)  # 10 ~ 200
+        return min(max(int(raw), 10), 200)
     except (ValueError, TypeError):
         return 50
 
 
+def _serialize_status_codes(codes: dict) -> dict:
+    """将状态码中的 None/空 转为字符串 key，方便前端显示。"""
+    result = {}
+    for k, v in codes.items():
+        key = str(k) if k is not None else "-"
+        result[key] = v
+    return result
+
+
 def _build_page_range(num_pages, current):
-    """生成分页页码列表，处理省略号显示。"""
     if num_pages <= 10:
         return list(range(1, num_pages + 1))
 

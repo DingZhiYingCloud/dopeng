@@ -1,0 +1,192 @@
+{% extends "admin/base.html" %}
+{% load static %}
+
+{% block title %}数据大屏 - 后台管理{% endblock %}
+{% block page_title %}📈 数据大屏{% endblock %}
+{% block topbar_right %}实时请求概览{% endblock %}
+
+{% block extra_head %}
+<style>
+  .charts-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  .chart-card {
+    background: #fff;
+    border-radius: 10px;
+    padding: 20px 22px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+  .chart-card h3 {
+    font-size: 15px;
+    font-weight: 600;
+    color: #444;
+    margin-bottom: 14px;
+  }
+  .chart-card .chart-wrap {
+    position: relative;
+    height: 260px;
+  }
+  .chart-card-full {
+    grid-column: 1 / -1;
+  }
+  .chart-card-full .chart-wrap { height: 320px; }
+
+  .stats-bar {
+    display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap;
+  }
+  .stat-card {
+    background: #fff; border-radius: 10px; padding: 20px 24px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06); min-width: 130px; flex: 1;
+    text-align: center;
+  }
+  .stat-card .num { font-size: 32px; font-weight: 700; }
+  .stat-card .label { font-size: 13px; color: #888; margin-top: 4px; }
+
+  @media (max-width: 900px) {
+    .charts-row { grid-template-columns: 1fr; }
+    .chart-card .chart-wrap { height: 220px; }
+    .chart-card-full .chart-wrap { height: 260px; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+
+{# ===== 概览统计卡片 ===== #}
+<div class="stats-bar">
+  <div class="stat-card">
+    <div class="num" id="statTotal">-</div>
+    <div class="label">总请求</div>
+  </div>
+  <div class="stat-card">
+    <div class="num" id="statSpider" style="color:#e65100;">-</div>
+    <div class="label">爬虫</div>
+  </div>
+  <div class="stat-card">
+    <div class="num" id="statEngine" style="color:#1565c0;">-</div>
+    <div class="label">搜索引擎(真人)</div>
+  </div>
+  <div class="stat-card">
+    <div class="num" id="statNormal" style="color:#2e7d32;">-</div>
+    <div class="label">普通</div>
+  </div>
+</div>
+
+{# ===== 图表区域 ===== #}
+<div class="charts-row">
+  <div class="chart-card">
+    <h3>📊 请求类型分布</h3>
+    <div class="chart-wrap"><canvas id="chartType"></canvas></div>
+  </div>
+  <div class="chart-card">
+    <h3>🔴 状态码分布</h3>
+    <div class="chart-wrap"><canvas id="chartStatus"></canvas></div>
+  </div>
+  <div class="chart-card chart-card-full">
+    <h3>📈 近期请求趋势（按小时）</h3>
+    <div class="chart-wrap"><canvas id="chartTrend"></canvas></div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script>
+(function() {
+  fetch('/stats/chart-data/')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      // 更新统计数字
+      document.getElementById('statTotal').textContent = data.total;
+      document.getElementById('statSpider').textContent = data.spider_count;
+      document.getElementById('statEngine').textContent = data.engine_count;
+      document.getElementById('statNormal').textContent = data.normal_count;
+
+      // 1. 类型分布（环形图）
+      new Chart(document.getElementById('chartType'), {
+        type: 'doughnut',
+        data: {
+          labels: ['爬虫', '搜索引擎(真人)', '普通'],
+          datasets: [{
+            data: [data.spider_count, data.engine_count, data.normal_count],
+            backgroundColor: ['#e65100', '#1565c0', '#2e7d32'],
+            borderWidth: 0,
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom', labels: { padding: 16, font: { size: 13 } } } }
+        }
+      });
+
+      // 2. 状态码分布（柱状图）
+      var sc = data.status_codes || {};
+      new Chart(document.getElementById('chartStatus'), {
+        type: 'bar',
+        data: {
+          labels: Object.keys(sc),
+          datasets: [{
+            label: '数量',
+            data: Object.values(sc),
+            backgroundColor: ['#2e7d32', '#c62828', '#e65100', '#6a1b9a', '#1565c0'],
+            borderRadius: 4,
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
+        }
+      });
+
+      // 3. 请求趋势（折线图）
+      var trend = data.hourly_trend || {};
+      var hours = Object.keys(trend).sort();
+      new Chart(document.getElementById('chartTrend'), {
+        type: 'line',
+        data: {
+          labels: hours,
+          datasets: [
+            {
+              label: '爬虫',
+              data: hours.map(function(h) { return (trend[h].spider || 0); }),
+              borderColor: '#e65100', backgroundColor: 'rgba(230,81,0,0.08)',
+              fill: true, tension: 0.3, pointRadius: 3,
+            },
+            {
+              label: '搜索引擎',
+              data: hours.map(function(h) { return (trend[h].engine || 0); }),
+              borderColor: '#1565c0', backgroundColor: 'rgba(21,101,192,0.08)',
+              fill: true, tension: 0.3, pointRadius: 3,
+            },
+            {
+              label: '普通',
+              data: hours.map(function(h) { return (trend[h].normal || 0); }),
+              borderColor: '#2e7d32', backgroundColor: 'rgba(46,125,50,0.08)',
+              fill: true, tension: 0.3, pointRadius: 3,
+            },
+          ]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: { legend: { position: 'bottom', labels: { padding: 14, font: { size: 12 } } } },
+          scales: {
+            x: { grid: { display: false }, ticks: { maxRotation: 45, font: { size: 11 } } },
+            y: { beginAtZero: true, ticks: { stepSize: 1 } }
+          }
+        }
+      });
+    })
+    .catch(function() {
+      document.querySelectorAll('.chart-wrap').forEach(function(el) {
+        el.innerHTML = '<div style="text-align:center;padding:60px;color:#999;">数据加载失败</div>';
+      });
+    });
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,442 @@
+{% extends "admin/base.html" %}
+{% load stats_tags %}
+
+{% block title %}请求日志 - 后台管理{% endblock %}
+{% block page_title %}📋 请求访问日志{% endblock %}
+{% block topbar_right %}共 <strong>{{ total }}</strong> 条记录{% endblock %}
+
+{% block extra_head %}
+<style>
+  /* ---- 统计卡片 ---- */
+  .stats-bar {
+    display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap;
+  }
+  .stat-card {
+    background: #fff; border-radius: 10px; padding: 16px 22px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06); min-width: 120px; flex: 1;
+  }
+  .stat-card .num { font-size: 26px; font-weight: 700; }
+  .stat-card .label { font-size: 12px; color: #888; margin-top: 2px; }
+
+  /* ---- 筛选栏 ---- */
+  .filter-bar {
+    background: #fff; border-radius: 10px; padding: 16px 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06); margin-bottom: 16px;
+  }
+  .filter-row {
+    display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end;
+  }
+  .filter-group { display: flex; flex-direction: column; gap: 4px; }
+  .filter-group label { font-size: 12px; color: #888; font-weight: 500; }
+  .filter-group input,
+  .filter-group select {
+    padding: 7px 12px; border: 1px solid #ddd; border-radius: 6px;
+    font-size: 13px; background: #fff; outline: none; transition: border-color 0.15s;
+  }
+  .filter-group input:focus,
+  .filter-group select:focus { border-color: #4a6cf7; }
+  .filter-group input { min-width: 130px; }
+  .filter-group select { min-width: 100px; }
+  .filter-bar .actions {
+    display: flex; gap: 8px; align-items: flex-end; margin-left: auto;
+  }
+
+  /* 活跃筛选标签 */
+  .active-filters {
+    display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px;
+  }
+  .active-filter {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; background: #eef1ff; color: #4a6cf7;
+    border-radius: 20px; font-size: 12px; font-weight: 500;
+  }
+  .active-filter .remove {
+    cursor: pointer; font-size: 14px; line-height: 1; opacity: 0.6;
+    text-decoration: none; color: #4a6cf7;
+  }
+  .active-filter .remove:hover { opacity: 1; }
+
+  /* ---- 表格 ---- */
+  .table-wrap {
+    background: #fff; border-radius: 10px; overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+  .table-scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  thead { background: #fafafa; }
+  th {
+    padding: 11px 14px; text-align: left; font-size: 12px;
+    font-weight: 600; color: #555; border-bottom: 1px solid #eee;
+    white-space: nowrap; user-select: none;
+  }
+  td {
+    padding: 9px 14px; font-size: 13px; border-bottom: 1px solid #f0f0f0;
+    max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  tr:hover td { background: #f8f9ff; }
+  tr { cursor: pointer; }
+  .path-cell { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ---- 弹窗 ---- */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; z-index: 1000;
+    background: rgba(0,0,0,0.4); align-items: center; justify-content: center;
+  }
+  .modal-overlay.active { display: flex; }
+  .modal {
+    background: #fff; border-radius: 12px; width: 92%; max-width: 760px;
+    max-height: 88vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+  }
+  .modal-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 18px 24px; border-bottom: 1px solid #eee; position: sticky; top: 0;
+    background: #fff; z-index: 1;
+  }
+  .modal-header h2 { font-size: 17px; font-weight: 600; }
+  .modal-close {
+    width: 30px; height: 30px; border: none; background: #f0f0f0;
+    border-radius: 50%; cursor: pointer; font-size: 16px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .modal-close:hover { background: #e0e0e0; }
+  .modal-body { padding: 20px 24px 24px; }
+  .detail-table { width: 100%; border-collapse: collapse; }
+  .detail-table th, .detail-table td {
+    padding: 9px 14px; text-align: left; font-size: 13px;
+    border-bottom: 1px solid #f0f0f0; vertical-align: top;
+  }
+  .detail-table th {
+    width: 130px; color: #888; font-weight: 500; background: #fafafa;
+    white-space: nowrap;
+  }
+  .detail-table td { word-break: break-all; white-space: pre-wrap; }
+  .modal-loading { text-align: center; padding: 50px; color: #999; }
+
+  /* ---- 模板说明提示框 ---- */
+  .tmpl-popup {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 2000;
+    background: rgba(0,0,0,0.3);
+    align-items: center;
+    justify-content: center;
+  }
+  .tmpl-popup.active { display: flex; }
+  .tmpl-popup-content {
+    background: #fff;
+    border-radius: 12px;
+    padding: 28px 32px;
+    max-width: 520px;
+    width: 90%;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+    position: relative;
+  }
+  .tmpl-popup-content h3 { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
+  .tmpl-popup-content p { font-size: 14px; line-height: 1.7; color: #444; margin-bottom: 10px; }
+  .tmpl-popup-content code {
+    display: inline-block;
+    background: #f5f5f5;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 13px;
+    color: #e65100;
+    font-family: monospace;
+  }
+  .tmpl-popup-content ul { margin: 8px 0 12px 20px; }
+  .tmpl-popup-content li { font-size: 14px; line-height: 1.8; color: #444; }
+  .tmpl-popup-close {
+    position: absolute;
+    top: 12px; right: 16px;
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    color: #999;
+  }
+  .tmpl-popup-close:hover { color: #333; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+{# ===== 统计卡片 ===== #}
+<div class="stats-bar">
+  <div class="stat-card">
+    <div class="num">{{ total }}</div>
+    <div class="label">总请求</div>
+  </div>
+  <div class="stat-card">
+    <div class="num" style="color:#e65100;">{{ spider_count }}</div>
+    <div class="label">爬虫</div>
+  </div>
+  <div class="stat-card">
+    <div class="num" style="color:#1565c0;">{{ engine_count }}</div>
+    <div class="label">搜索引擎(真人)</div>
+  </div>
+  <div class="stat-card">
+    <div class="num" style="color:#2e7d32;">{{ normal_count }}</div>
+    <div class="label">普通</div>
+  </div>
+  <div class="stat-card">
+    <div class="num" style="color:#c62828;">{{ redirect_count }}</div>
+    <div class="label">302重定向</div>
+  </div>
+</div>
+
+{# ===== 筛选栏 ===== #}
+<form class="filter-bar" method="GET" action="">
+  <div class="filter-row">
+    <div class="filter-group" style="flex:1;min-width:180px;">
+      <label for="q">搜索</label>
+      <input type="text" id="q" name="q" placeholder="IP / 路径 / Host / UA ..." value="{{ current_q }}">
+    </div>
+    <div class="filter-group">
+      <label for="type">类型</label>
+      <select id="type" name="type">
+        <option value="">全部</option>
+        <option value="spider" {% if current_type == "spider" %}selected{% endif %}>爬虫</option>
+        <option value="engine" {% if current_type == "engine" %}selected{% endif %}>搜索引擎(真人)</option>
+        <option value="normal" {% if current_type == "normal" %}selected{% endif %}>普通</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label for="status">状态码</label>
+      <select id="status" name="status">
+        <option value="">全部</option>
+        <option value="200" {% if current_status == "200" %}selected{% endif %}>200</option>
+        <option value="302" {% if current_status == "302" %}selected{% endif %}>302</option>
+        <option value="404" {% if current_status == "404" %}selected{% endif %}>404</option>
+        <option value="500" {% if current_status == "500" %}selected{% endif %}>500</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label for="subdomain">子域名</label>
+      <select id="subdomain" name="subdomain">
+        <option value="">全部</option>
+        {% for s in subdomain_list %}
+          <option value="{{ s }}" {% if current_subdomain == s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="filter-group">
+      <label for="date_from">从</label>
+      <input type="date" id="date_from" name="date_from" value="{{ current_date_from }}">
+    </div>
+    <div class="filter-group">
+      <label for="date_to">至</label>
+      <input type="date" id="date_to" name="date_to" value="{{ current_date_to }}">
+    </div>
+    <div class="filter-group">
+      <label for="page_size">每页</label>
+      <select id="page_size" name="page_size" onchange="this.form.submit()">
+        <option value="20" {% if current_page_size == 20 %}selected{% endif %}>20</option>
+        <option value="50" {% if current_page_size == 50 %}selected{% endif %}>50</option>
+        <option value="100" {% if current_page_size == 100 %}selected{% endif %}>100</option>
+        <option value="200" {% if current_page_size == 200 %}selected{% endif %}>200</option>
+      </select>
+    </div>
+    <div class="actions">
+      <button type="submit" class="btn btn-primary">筛选</button>
+      <a href="{% url 'stats' %}" class="btn btn-outline" style="text-decoration:none;display:inline-flex;align-items:center;">重置</a>
+    </div>
+  </div>
+
+  {# 活跃筛选标签 #}
+  {% if current_q or current_type or current_status or current_subdomain or current_date_from or current_date_to %}
+  <div class="active-filters">
+    <span style="font-size:12px;color:#888;font-weight:500;">活跃筛选：</span>
+    {% if current_q %}
+      <span class="active-filter">搜索: {{ current_q|truncatechars:20 }} <a class="remove" href="?{% url_replace q='' page='' %}">✕</a></span>
+    {% endif %}
+    {% if current_type %}
+      <span class="active-filter">类型: {{ current_type }} <a class="remove" href="?{% url_replace type='' page='' %}">✕</a></span>
+    {% endif %}
+    {% if current_status %}
+      <span class="active-filter">状态: {{ current_status }} <a class="remove" href="?{% url_replace status='' page='' %}">✕</a></span>
+    {% endif %}
+    {% if current_subdomain %}
+      <span class="active-filter">子域名: {{ current_subdomain }} <a class="remove" href="?{% url_replace subdomain='' page='' %}">✕</a></span>
+    {% endif %}
+    {% if current_date_from or current_date_to %}
+      <span class="active-filter">日期: {{ current_date_from|default:"-" }} ~ {{ current_date_to|default:"-" }}</span>
+    {% endif %}
+  </div>
+  {% endif %}
+</form>
+
+{# ===== 表格 ===== #}
+<div class="table-wrap">
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr>
+        <th>时间</th>
+        <th>IP</th>
+        <th>方法</th>
+        <th>路径</th>
+        <th>Host</th>
+        <th>子域名</th>
+        <th>类型</th>
+        <th>状态</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for log in logs %}
+      <tr onclick="showDetail({{ log.id }})">
+        <td title="{{ log.timestamp|date:'Y-m-d H:i:s' }}">{{ log.timestamp|date:"m-d H:i:s" }}</td>
+        <td>{{ log.ip|default:"-" }}</td>
+        <td>{{ log.method }}</td>
+        <td class="path-cell" title="{{ log.path }}">{{ log.path }}</td>
+        <td title="{{ log.host }}">{{ log.host|truncatechars:28 }}</td>
+        <td>{{ log.subdomain|default:"-" }}</td>
+        <td>
+          {% if log.is_spider %}
+            <span class="badge badge-spider">爬虫</span>
+          {% elif log.is_from_search_engine %}
+            <span class="badge badge-engine">搜索引擎</span>
+          {% else %}
+            <span class="badge badge-normal">普通</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if log.status_code == 302 %}
+            <span class="badge badge-redirect">302</span>
+          {% elif log.status_code == 200 %}
+            <span class="badge badge-200">200</span>
+          {% else %}
+            <span class="badge badge-other">{{ log.status_code|default:"-" }}</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="8" style="text-align:center;padding:50px;color:#999;">暂无匹配记录</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+{# ===== 分页 ===== #}
+{% if num_pages > 1 %}
+<div class="pagination">
+  {% if has_prev %}
+    <a href="?{% url_replace page=prev_page %}">«</a>
+  {% else %}
+    <span class="disabled">«</span>
+  {% endif %}
+  {% for p in page_range %}
+    {% if p == "..." %}
+      <span class="dots">…</span>
+    {% elif p == page %}
+      <span class="page-num active">{{ p }}</span>
+    {% else %}
+      <a href="?{% url_replace page=p %}">{{ p }}</a>
+    {% endif %}
+  {% endfor %}
+  {% if has_next %}
+    <a href="?{% url_replace page=next_page %}">»</a>
+  {% else %}
+    <span class="disabled">»</span>
+  {% endif %}
+  <span class="page-info">{{ page }} / {{ num_pages }} 页（共 {{ total }} 条）</span>
+</div>
+{% endif %}
+
+{# ===== 详情弹窗 ===== #}
+<div class="modal-overlay" id="modal" onclick="closeModalOutside(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>请求详情</h2>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body" id="modalBody">
+      <div class="modal-loading">加载中...</div>
+    </div>
+  </div>
+</div>
+
+{# ===== 响应模板说明弹窗 ===== #}
+<div class="tmpl-popup" id="tmplPopup" onclick="closeTmplPopupOutside(event)">
+  <div class="tmpl-popup-content">
+    <button class="tmpl-popup-close" onclick="closeTmplPopup()">✕</button>
+    <h3>📄 响应模板 (<code>response_template</code>) 说明</h3>
+    <p>该字段记录后端处理请求时<strong>实际使用的模板或响应方式</strong>。</p>
+    <ul>
+      <li><code>index1.html</code> / <code>index3.html</code> … — 表示经过 <strong>render()</strong> 渲染了具体模板，请求看到了正常的 HTML 页面内容。</li>
+      <li><code>redirect</code> — 表示请求被 <strong>302 重定向</strong> 到了雅虎搜索，没有渲染任何模板。</li>
+      <li><code>direct_response</code> — 表示状态码为 200，但<strong>不是通过模板渲染</strong>返回的（例如 JSON 接口、纯 HttpResponse 等）。<br>
+        ⚠️ <strong>这并不表示蜘蛛看不到内容</strong>——蜘蛛走的是 <code>render()</code> 分支，会正确记录模板名。<code>direct_response</code> 大多出现在 <code>/stats/</code>、<code>/stats/chart-data/</code> 等后台接口请求上。</li>
+    </ul>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script>
+/* ============================
+   详情弹窗
+   ============================ */
+function showDetail(logId) {
+  var modal = document.getElementById('modal');
+  var body = document.getElementById('modalBody');
+  body.innerHTML = '<div class="modal-loading">加载中...</div>';
+  modal.classList.add('active');
+
+  fetch('/stats/detail/' + logId + '/')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var rows = [
+        { label: 'ID', value: d.id },
+        { label: '请求时间', value: d.timestamp },
+        { label: '客户端IP', value: d.ip },
+        { label: '请求方法', value: d.method },
+        { label: '请求路径', value: d.path },
+        { label: '完整路径(含参数)', value: d.full_path || '-' },
+        { label: 'Host', value: d.host || '-' },
+        { label: '二级域名前缀', value: d.subdomain || '-' },
+        { label: 'User-Agent', value: d.user_agent || '-' },
+        { label: 'Referer', value: d.referer || '-' },
+        { label: 'Accept-Language', value: d.accept_language || '-' },
+        { label: 'Accept-Encoding', value: d.accept_encoding || '-' },
+        { label: '是否爬虫', value: d.is_spider ? '是 (' + (d.matched_spider || '未知') + ')' : '否' },
+        { label: '是否来自搜索引擎', value: d.is_from_search_engine ? '是 (' + (d.matched_engine || '未知') + ')' : '否' },
+        { label: '响应状态码', value: d.status_code || '-' },
+        { label: '响应模板', value: (d.response_template || '-') + ' <sup class="tmpl-help" onclick="event.stopPropagation(); showTmplHelp()" style="cursor:pointer;color:#4a6cf7;font-weight:bold;font-size:14px;">?</sup>', is_html: true },
+      ];
+      var html = '<table class="detail-table">';
+      rows.forEach(function(r) {
+        if (r.is_html) {
+          html += '<tr><th>' + r.label + '</th><td>' + r.value + '</td></tr>';
+        } else {
+          html += '<tr><th>' + r.label + '</th><td>' + esc(r.value) + '</td></tr>';
+        }
+      });
+      html += '</table>';
+      body.innerHTML = html;
+    })
+    .catch(function() {
+      body.innerHTML = '<div class="modal-loading" style="color:#c62828;">加载失败</div>';
+    });
+}
+function closeModal() { document.getElementById('modal').classList.remove('active'); }
+function closeModalOutside(e) { if (e.target === document.getElementById('modal')) closeModal(); }
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') { closeModal(); closeTmplPopup(); }
+});
+function esc(s) { if (s == null) return '-'; var d = document.createElement('div'); d.textContent = String(s); return d.innerHTML; }
+
+/* ---- 响应模板说明弹窗 ---- */
+function showTmplHelp() {
+  document.getElementById('tmplPopup').classList.add('active');
+}
+function closeTmplPopup() {
+  document.getElementById('tmplPopup').classList.remove('active');
+}
+function closeTmplPopupOutside(e) {
+  if (e.target === document.getElementById('tmplPopup')) closeTmplPopup();
+}
+</script>
+{% endblock %}
