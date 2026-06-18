@@ -124,3 +124,6 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 # 主域名
 MAIN_DOMAIN = os.getenv('MAIN_DOMAIN', 'domain.com')
 
+# 斗篷开关：False 时关闭斗篷分流，所有请求直接渲染模板
+CLOAK_ENABLED = os.getenv('CLOAK_ENABLED', 'True').lower() in ('true', '1', 'yes')
+

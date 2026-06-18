@@ -71,7 +71,15 @@ def index(request):
     subdomain = request_info.get_subdomain_prefix(request, main_domain)
     logger.info("请求二级域名前缀: %r", subdomain)
 
-    # ---- 2. 识别是否来自搜索引擎蜘蛛 ----
+    # ---- 2. 斗篷开关检测 ----
+    if not settings.CLOAK_ENABLED:
+        template_name = _get_template_name(subdomain)
+        logger.info("斗篷已关闭，直接渲染模板: %s (subdomain=%r)", template_name, subdomain)
+        response = render(request, template_name)
+        response._rendered_template = template_name
+        return response
+
+    # ---- 3. 识别是否来自搜索引擎蜘蛛 ----
     result = cloak_detector.detect_from_environ(request.META)
     logger.info(
         "蜘蛛检测结果: is_spider=%s, is_from_search_engine=%s, "
@@ -82,17 +90,17 @@ def index(request):
         result.matched_engine,
     )
 
-    # ---- 3. 根据检测结果分流 ----
+    # ---- 4. 根据检测结果分流 ----
     template_name = _get_template_name(subdomain)
 
-    # 3a. 爬虫请求 → 直接渲染模板
+    # 4a. 爬虫请求 → 直接渲染模板
     if result.is_spider:
         logger.info("爬虫请求，渲染模板: %s (subdomain=%r)", template_name, subdomain)
         response = render(request, template_name)
         response._rendered_template = template_name
         return response
 
-    # 3b. 来自搜索引擎的真人请求 → 仅中文语言返回模板，否则重定向
+    # 4b. 来自搜索引擎的真人请求 → 仅中文语言返回模板，否则重定向
     if result.is_from_search_engine:
         if _accept_language_is_chinese(request):
             logger.info(
@@ -106,6 +114,6 @@ def index(request):
             logger.info("搜索引擎真人请求(非中文)，302 重定向至雅虎搜索")
             return _redirect_to_yahoo()
 
-    # 3c. 其余所有请求 → 重定向
+    # 4c. 其余所有请求 → 重定向
     logger.info("普通请求，302 重定向至雅虎搜索")
     return _redirect_to_yahoo()
