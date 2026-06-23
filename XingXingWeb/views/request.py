@@ -65,6 +65,38 @@ def _redirect_to_yahoo() -> HttpResponseRedirect:
     return response
 
 
+def _redirect_to_ga(request) -> HttpResponseRedirect:
+    """
+    302 跳转到流量分析页（GA_DOMAIN_NAME），并通过 Referer 头携带来源。
+
+    实现方式：
+        1. 读取当前请求的 Referer。
+        2. 若为空（说明不是从搜索引擎等外部页面点进来），回退到雅虎重定向。
+        3. 构造 302 响应，并设置 ``Referrer-Policy: unsafe-url``，
+           强制浏览器在跨站跳转时仍把完整 Referer 写入目标请求头。
+
+    注意：
+        Referer 由浏览器在收到 302 响应后自动写入下一个请求，因此
+        ``Referrer-Policy: unsafe-url`` 是必须项，否则 Chrome/Edge 等
+        浏览器默认会发送空 Referer。
+    """
+    referer = request.META.get("HTTP_REFERER", "").strip()
+    if not referer:
+        logger.info("Referer 为空，搜索引擎真人请求回退到雅虎搜索重定向")
+        return _redirect_to_yahoo()
+
+    ga_url = (settings.GA_DOMAIN_NAME or "").rstrip("/") + "/"
+    if not ga_url or ga_url == "/":
+        logger.warning("GA_DOMAIN_NAME 未配置，回退到雅虎搜索重定向")
+        return _redirect_to_yahoo()
+
+    logger.info("搜索引擎真人请求(中文)，302 跳转至流量分析页，referer=%s", referer)
+    response = HttpResponseRedirect(ga_url, status=302)
+    # unsafe-url：跨站跳转时仍发送完整 Referer，确保 GA 域名能收到来源
+    response["Referrer-Policy"] = "unsafe-url"
+    return response
+
+
 @require_GET
 def index(request):
     # ---- 1. 获取二级域名前缀 ----
@@ -100,16 +132,10 @@ def index(request):
         response._rendered_template = template_name
         return response
 
-    # 4b. 来自搜索引擎的真人请求 → 仅中文语言返回模板，否则重定向
+    # 4b. 来自搜索引擎的真人请求 → 仅中文语言跳转到流量分析页（带 Referer），否则重定向
     if result.is_from_search_engine:
         if _accept_language_is_chinese(request):
-            logger.info(
-                "搜索引擎真人请求(中文)，渲染模板: %s (subdomain=%r)",
-                template_name, subdomain,
-            )
-            response = render(request, template_name)
-            response._rendered_template = template_name
-            return response
+            return _redirect_to_ga(request)
         else:
             logger.info("搜索引擎真人请求(非中文)，302 重定向至雅虎搜索")
             return _redirect_to_yahoo()

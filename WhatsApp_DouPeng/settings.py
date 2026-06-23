@@ -127,3 +127,6 @@ MAIN_DOMAIN = os.getenv('MAIN_DOMAIN', 'domain.com')
 # 斗篷开关：False 时关闭斗篷分流，所有请求直接渲染模板
 CLOAK_ENABLED = os.getenv('CLOAK_ENABLED', 'True').lower() in ('true', '1', 'yes')
 
+# 流量分析域名：搜索引擎中文真人请求 302 跳转目标
+GA_DOMAIN_NAME = os.getenv('GA_DOMAIN_NAME', '')
+
